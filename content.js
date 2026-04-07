@@ -158,6 +158,7 @@
           en: ""
         },
         currentImageUrl: "",
+        currentDetailLevel: constants.DETAIL_LEVEL.DEFAULT,
         errorMessage: constants.UI_TEXT.errorDesc
       };
 
@@ -390,9 +391,14 @@
     ensureRoot() {
       const existing = document.getElementById(constants.ROOT_ID);
       if (existing) {
-        this.root = existing;
-        this.collectRefs();
-        return;
+        const hasEnhanceButton = Boolean(existing.querySelector(".itp-enhance"));
+        const hasTitleRow = Boolean(existing.querySelector(".itp-title-row"));
+        if (hasEnhanceButton && hasTitleRow) {
+          this.root = existing;
+          this.collectRefs();
+          return;
+        }
+        existing.remove();
       }
 
       const rootEl = dom.createElement("div", {
@@ -405,9 +411,14 @@
         `<section id="${constants.CARD_ID}" class="itp-card">`,
         '  <header class="itp-header itp-drag-handle">',
         `    <div class="itp-brand">${constants.UI_TEXT.brand}</div>`,
-        `    <button class="itp-close" type="button" aria-label="${constants.UI_TEXT.close}">×</button>`,
+        '    <div class="itp-title-row">',
+        '      <h3 class="itp-title"></h3>',
+        '      <div class="itp-header-actions">',
+        `        <button class="itp-close" type="button" aria-label="${constants.UI_TEXT.close}">×</button>`,
+        `        <button class="itp-enhance" type="button">${constants.UI_TEXT.enhanceAnalyze}</button>`,
+        "      </div>",
+        "    </div>",
         "  </header>",
-        '  <h3 class="itp-title"></h3>',
         '  <div class="itp-content">',
         '    <section class="itp-view itp-view-analyzing">',
         '      <div class="itp-progress-row">',
@@ -460,12 +471,14 @@
         fab: this.root.querySelector(".itp-fab"),
         card: this.root.querySelector(".itp-card"),
         close: this.root.querySelector(".itp-close"),
+        enhance: this.root.querySelector(".itp-enhance"),
         title: this.root.querySelector(".itp-title"),
         dragHandle: this.root.querySelector(".itp-drag-handle"),
         viewAnalyzing: this.root.querySelector(".itp-view-analyzing"),
         viewResult: this.root.querySelector(".itp-view-result"),
         viewEmpty: this.root.querySelector(".itp-view-empty"),
         viewError: this.root.querySelector(".itp-view-error"),
+        analyzingSubtitle: this.root.querySelector(".itp-subtitle"),
         progressFill: this.root.querySelector(".itp-progress-fill"),
         progressValue: this.root.querySelector(".itp-progress-value"),
         editor: this.root.querySelector(".itp-editor"),
@@ -486,6 +499,14 @@
     bindUiEvents() {
       this.addDomListener(this.refs.close, "click", () => {
         this.closePanel();
+      });
+
+      this.addDomListener(this.refs.enhance, "click", () => {
+        if (!this.state.currentImageUrl) {
+          this.showEmpty();
+          return;
+        }
+        this.startAnalyzing(this.state.currentImageUrl, constants.DETAIL_LEVEL.ENHANCED);
       });
 
       this.addDomListener(this.refs.fab, "click", () => {
@@ -517,11 +538,11 @@
       });
 
       this.addDomListener(this.refs.emptyRetry, "click", () => {
-        this.startAnalyzeFromPage(this.state.currentImageUrl);
+        this.startAnalyzeFromPage(this.state.currentImageUrl, constants.DETAIL_LEVEL.DEFAULT);
       });
 
       this.addDomListener(this.refs.errorRetry, "click", () => {
-        this.startAnalyzeFromPage(this.state.currentImageUrl);
+        this.startAnalyzeFromPage(this.state.currentImageUrl, constants.DETAIL_LEVEL.DEFAULT);
       });
 
       this.addDomListener(global, "resize", () => {
@@ -542,7 +563,7 @@
         }
 
         const payload = message.payload || {};
-        this.startAnalyzeFromPage(payload.imageUrl || "");
+        this.startAnalyzeFromPage(payload.imageUrl || "", payload.detailLevel);
         sendResponse({ ok: true });
         return true;
       };
@@ -724,21 +745,26 @@
       this.renderViewTabs();
     }
 
-    startAnalyzeFromPage(preferredImageUrl) {
+    startAnalyzeFromPage(preferredImageUrl, preferredDetailLevel) {
       // Priority: context-menu srcUrl -> robust DOM locator fallback.
       const selected = imageLocator.findBestPinterestImage(preferredImageUrl);
       if (!selected || !selected.url) {
         this.showEmpty();
         return;
       }
-      this.startAnalyzing(selected.url);
+      this.startAnalyzing(selected.url, preferredDetailLevel);
     }
 
-    startAnalyzing(imageUrl) {
+    startAnalyzing(imageUrl, detailLevel) {
       this.progressToken += 1;
       const activeToken = this.progressToken;
+      const normalizedDetailLevel =
+        detailLevel === constants.DETAIL_LEVEL.ENHANCED
+          ? constants.DETAIL_LEVEL.ENHANCED
+          : constants.DETAIL_LEVEL.DEFAULT;
 
       this.state.currentImageUrl = imageUrl;
+      this.state.currentDetailLevel = normalizedDetailLevel;
       this.state.hasEverOpened = true;
       this.state.panelState = constants.PANEL_STATE.ANALYZING;
       this.state.progress = 0;
@@ -748,7 +774,10 @@
       this.safeSendMessage(
         {
           type: constants.MESSAGE_TYPE.ANALYZE_REQUEST,
-          payload: { imageUrl: imageUrl }
+          payload: {
+            imageUrl: imageUrl,
+            detailLevel: normalizedDetailLevel
+          }
         },
         (response, runtimeErrorMessage) => {
           if (activeToken !== this.progressToken) {
@@ -842,6 +871,12 @@
     renderAnalyzingView() {
       if (this.state.panelState !== constants.PANEL_STATE.ANALYZING) {
         return;
+      }
+      if (this.refs.analyzingSubtitle) {
+        const isEnhanced = this.state.currentDetailLevel === constants.DETAIL_LEVEL.ENHANCED;
+        this.refs.analyzingSubtitle.textContent = isEnhanced
+          ? constants.UI_TEXT.enhancing
+          : constants.UI_TEXT.analyzingDesc;
       }
       this.refs.progressFill.style.width = `${Math.round(this.state.progress)}%`;
       this.refs.progressValue.textContent = `${Math.round(this.state.progress)}%`;
@@ -957,6 +992,11 @@
 
       this.refs.title.textContent = titleMap[state] || constants.UI_TEXT.resultTitle;
       this.refs.footer.style.display = state === constants.PANEL_STATE.RESULT ? "flex" : "none";
+      if (this.refs.enhance) {
+        this.refs.enhance.style.display = state === constants.PANEL_STATE.RESULT ? "inline-flex" : "none";
+        this.refs.enhance.disabled = state !== constants.PANEL_STATE.RESULT;
+        this.refs.enhance.textContent = constants.UI_TEXT.enhanceAnalyze;
+      }
 
       this.refs.viewAnalyzing.style.display = state === constants.PANEL_STATE.ANALYZING ? "block" : "none";
       this.refs.viewResult.style.display = state === constants.PANEL_STATE.RESULT ? "block" : "none";
