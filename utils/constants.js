@@ -21,6 +21,11 @@
       JSON: "json"
     },
 
+    DETAIL_LEVEL: {
+      DEFAULT: "default",
+      ENHANCED: "enhanced"
+    },
+
     MESSAGE_TYPE: {
       OPEN_AND_ANALYZE: "IMGTOPROMPT_OPEN_AND_ANALYZE",
       ANALYZE_REQUEST: "IMGTOPROMPT_ANALYZE_REQUEST",
@@ -29,7 +34,8 @@
     },
 
     STORAGE_KEY: {
-      PANEL_POSITION: "imgtoprompt_panel_position"
+      PANEL_POSITION: "imgtoprompt_panel_position",
+      INSTALLATION_ID: "imgtoprompt_installation_id"
     },
 
     UI_TEXT: {
@@ -43,6 +49,8 @@
       errorDesc: "请求失败，请稍后重试。",
       retry: "重试",
       analyzeNow: "分析图片",
+      enhanceAnalyze: "增强分析",
+      enhancing: "增强分析中...",
       copy: "复制",
       copySuccess: "已复制到剪贴板",
       promptLabel: "Prompt",
@@ -55,8 +63,8 @@
       panelMinHeight: 320,
       dragPadding: 12,
       progressTickMs: 90,
-      imageBase64MaxEdge: 1024,
-      imageBase64JpegQuality: 0.82,
+      imageBase64MaxEdge: 960,
+      imageBase64JpegQuality: 0.78,
       imageEncodeTimeoutMs: 8000
     }
   };
