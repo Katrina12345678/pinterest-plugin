@@ -13,6 +13,11 @@ const CURRENT_API_KEY = normalizeApiKey(CURRENT_RAW_API_KEY);
 const MODEL_TAG = /gemini/i.test(CURRENT_MODEL) ? "GEMINI" : "KIMI";
 const REQUEST_TIMEOUT_MS = Number.parseInt(process.env.UPSTREAM_TIMEOUT_MS || "20000", 10) || 20000;
 const IMAGE_DOWNLOAD_TIMEOUT_MS = Math.min(REQUEST_TIMEOUT_MS, 20000);
+const UPSTREAM_RETRY_COUNT = Math.max(0, Number.parseInt(process.env.UPSTREAM_RETRY_COUNT || "2", 10) || 2);
+const UPSTREAM_RETRY_BASE_DELAY_MS = Math.max(
+  200,
+  Number.parseInt(process.env.UPSTREAM_RETRY_BASE_DELAY_MS || "1200", 10) || 1200
+);
 const ANALYZE_CACHE_TTL_MS = Number.parseInt(process.env.ANALYZE_CACHE_TTL_MS || "600000", 10) || 600000;
 const ANALYZE_CACHE_MAX_ITEMS = 200;
 const DEBUG_UPSTREAM_RAW = /^(1|true|yes)$/i.test(String(process.env.DEBUG_UPSTREAM_RAW || ""));
@@ -27,6 +32,12 @@ function nowMs() {
 
 function durationFrom(startMs) {
   return Math.max(0, nowMs() - startMs);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, ms));
+  });
 }
 
 function logTiming(modelTag, stage, ms, extra) {
@@ -693,65 +704,118 @@ async function callUpstreamAnalyze(params) {
       };
     }
 
-    const upstreamStartMs = nowMs();
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, REQUEST_TIMEOUT_MS);
-
+    const maxAttempts = UPSTREAM_RETRY_COUNT + 1;
     let response;
     let responseHeaders = {};
-    try {
-      response = await fetch(requestEndpoint, {
-        method: "POST",
-        headers: requestHeaders,
-        body: JSON.stringify(requestBody),
-        signal: controller.signal
-      });
-    } catch (error) {
-      if (error && error.name === "AbortError") {
-        const timeoutError = new Error(`${modelTag} request timed out.`);
-        timeoutError.code = `${errorPrefix}_TIMEOUT`;
-        timeoutError.statusCode = 504;
-        throw timeoutError;
+    let rawText = "";
+    let parsed = {};
+    let parsedOk = true;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const upstreamStartMs = nowMs();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, REQUEST_TIMEOUT_MS);
+
+      try {
+        response = await fetch(requestEndpoint, {
+          method: "POST",
+          headers: requestHeaders,
+          body: JSON.stringify(requestBody),
+          signal: controller.signal
+        });
+      } catch (error) {
+        if (error && error.name === "AbortError") {
+          if (attempt < maxAttempts) {
+            const timeoutDelayMs = UPSTREAM_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+            console.log(
+              `[${modelTag}] upstream retry scheduled: timeout on attempt ${attempt}/${maxAttempts}, wait ${timeoutDelayMs}ms`
+            );
+            await sleep(timeoutDelayMs);
+            continue;
+          }
+
+          const timeoutError = new Error(`${modelTag} request timed out.`);
+          timeoutError.code = `${errorPrefix}_TIMEOUT`;
+          timeoutError.statusCode = 504;
+          throw timeoutError;
+        }
+
+        const causeCode =
+          (error && error.cause && error.cause.code) || (error && error.code) || "NETWORK_UNKNOWN";
+        const causeMessage =
+          (error && error.cause && error.cause.message) ||
+          (error && error.message) ||
+          String(error || "unknown network error");
+        const dnsHint = /ENOTFOUND|EAI_AGAIN|getaddrinfo|resolve host/i.test(causeMessage)
+          ? " DNS 解析失败，请检查本机网络、DNS 或代理设置。"
+          : "";
+
+        if (attempt < maxAttempts) {
+          const networkDelayMs = UPSTREAM_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          console.log(
+            `[${modelTag}] upstream retry scheduled: network_error(${causeCode}) on attempt ${attempt}/${maxAttempts}, wait ${networkDelayMs}ms`
+          );
+          await sleep(networkDelayMs);
+          continue;
+        }
+
+        const networkError = new Error(`Failed to connect to ${modelTag} API. ${causeMessage}.${dnsHint}`);
+        networkError.code = `${errorPrefix}_NETWORK_ERROR`;
+        networkError.statusCode = 502;
+        networkError.causeCode = String(causeCode);
+        networkError.causeMessage = String(causeMessage);
+        throw networkError;
+      } finally {
+        clearTimeout(timeoutId);
+        logTiming(modelTag, "upstream_request_wait", durationFrom(upstreamStartMs), `attempt_${attempt}`);
       }
 
-      const causeCode =
-        (error && error.cause && error.cause.code) || (error && error.code) || "NETWORK_UNKNOWN";
-      const causeMessage =
-        (error && error.cause && error.cause.message) ||
-        (error && error.message) ||
-        String(error || "unknown network error");
-      const dnsHint = /ENOTFOUND|EAI_AGAIN|getaddrinfo|resolve host/i.test(causeMessage)
-        ? " DNS 解析失败，请检查本机网络、DNS 或代理设置。"
-        : "";
-      const networkError = new Error(`Failed to connect to ${modelTag} API. ${causeMessage}.${dnsHint}`);
-      networkError.code = `${errorPrefix}_NETWORK_ERROR`;
-      networkError.statusCode = 502;
-      networkError.causeCode = String(causeCode);
-      networkError.causeMessage = String(causeMessage);
-      throw networkError;
-    } finally {
-      clearTimeout(timeoutId);
-      logTiming(modelTag, "upstream_request_wait", durationFrom(upstreamStartMs));
+      responseHeaders = Object.fromEntries(response.headers.entries());
+      console.log(`[${modelTag}] upstream response.status:`, response.status, `attempt ${attempt}/${maxAttempts}`);
+      console.log(`[${modelTag}] upstream response.statusText:`, response.statusText);
+      console.log(`[${modelTag}] upstream response.headers:`, responseHeaders);
+
+      rawText = await response.text();
+      if (DEBUG_UPSTREAM_RAW) {
+        console.log(`[${modelTag}] upstream response.body raw:`, rawText);
+      } else {
+        console.log(`[${modelTag}] upstream response.body size:`, rawText.length);
+      }
+
+      parsedOk = true;
+      try {
+        parsed = rawText ? JSON.parse(rawText) : {};
+      } catch (error) {
+        parsedOk = false;
+        parsed = {};
+      }
+
+      if (!response.ok && attempt < maxAttempts) {
+        const retryableStatus = [429, 500, 502, 503, 504].includes(Number(response.status));
+        const errorObj =
+          parsed && parsed.error && typeof parsed.error === "object"
+            ? parsed.error
+            : parsed && typeof parsed === "object"
+            ? parsed
+            : {};
+        const messageHint = String(errorObj.message || errorObj.msg || "");
+        const highDemand = /high demand|temporar|unavailable|overloaded|rate limit|quota/i.test(messageHint);
+        if (retryableStatus || highDemand) {
+          const retryDelayMs = UPSTREAM_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          console.log(
+            `[${modelTag}] upstream retry scheduled: status ${response.status} on attempt ${attempt}/${maxAttempts}, wait ${retryDelayMs}ms`
+          );
+          await sleep(retryDelayMs);
+          continue;
+        }
+      }
+
+      break;
     }
 
-    responseHeaders = Object.fromEntries(response.headers.entries());
-    console.log(`[${modelTag}] upstream response.status:`, response.status);
-    console.log(`[${modelTag}] upstream response.statusText:`, response.statusText);
-    console.log(`[${modelTag}] upstream response.headers:`, responseHeaders);
-
-    const rawText = await response.text();
-    if (DEBUG_UPSTREAM_RAW) {
-      console.log(`[${modelTag}] upstream response.body raw:`, rawText);
-    } else {
-      console.log(`[${modelTag}] upstream response.body size:`, rawText.length);
-    }
-
-    let parsed;
-    try {
-      parsed = rawText ? JSON.parse(rawText) : {};
-    } catch (error) {
+    if (!parsedOk) {
       if (!response.ok) {
         const nonJsonError = new Error(
           rawText || `${modelTag} request failed with status ${response.status} and non-JSON response.`
