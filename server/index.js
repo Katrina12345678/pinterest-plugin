@@ -56,6 +56,7 @@ console.log(
 const express = require("express");
 const cors = require("cors");
 const { callUpstreamAnalyze, CURRENT_MODEL, MODEL_TAG } = require("./upstreamClient");
+const { FREE_ANALYZE_LIMIT, getQuota, consumeQuota } = require("./quotaStore");
 
 const app = express();
 const PORT = 3001;
@@ -69,9 +70,34 @@ app.get("/health", function health(_req, res) {
     service: "imgtoprompt-local-server",
     port: PORT,
     model: CURRENT_MODEL,
-    provider: MODEL_TAG
+    provider: MODEL_TAG,
+    freeAnalyzeLimit: FREE_ANALYZE_LIMIT
   });
 });
+
+function normalizeInstallId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  return raw.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
+}
+
+function resolveQuotaClientKey(req, body) {
+  const installId = normalizeInstallId(body && body.installId);
+  if (installId) {
+    return `install:${installId}`;
+  }
+
+  const forwarded = String(req.headers["x-forwarded-for"] || "")
+    .split(",")[0]
+    .trim();
+  const realIp = String(req.headers["x-real-ip"] || "").trim();
+  const ip = forwarded || realIp || req.ip || "unknown_ip";
+  const userAgent = String(req.headers["user-agent"] || "unknown_ua");
+  const fingerprint = crypto.createHash("sha1").update(`${ip}|${userAgent}`).digest("hex").slice(0, 24);
+  return `anon:${fingerprint}`;
+}
 
 async function analyzeImage(body) {
   const payload = body || {};
@@ -94,9 +120,35 @@ async function analyzeImage(body) {
 }
 
 app.post("/api/analyze-image", async function analyzeImageHandler(req, res) {
+  const quotaClientKey = resolveQuotaClientKey(req, req.body || {});
+  const quotaBefore = getQuota(quotaClientKey);
+  if (quotaBefore.remaining <= 0) {
+    res.status(429).json({
+      error: {
+        code: "QUOTA_EXCEEDED",
+        message: `免费额度已用完（${quotaBefore.limit}/${quotaBefore.limit}）`,
+        type: "quota_limit"
+      },
+      quota: {
+        limit: quotaBefore.limit,
+        used: quotaBefore.used,
+        remaining: quotaBefore.remaining
+      }
+    });
+    return;
+  }
+
   try {
     const result = await analyzeImage(req.body);
-    res.json(result);
+    const quotaAfter = consumeQuota(quotaClientKey);
+    res.json({
+      ...result,
+      quota: {
+        limit: quotaAfter.limit,
+        used: quotaAfter.used,
+        remaining: quotaAfter.remaining
+      }
+    });
   } catch (error) {
     console.error("analyze-image error:", error);
     const statusCode = Number(error && error.statusCode) || 500;
