@@ -73,29 +73,30 @@ app.get("/health", function health(_req, res) {
   });
 });
 
-app.post("/api/analyze-image", async function analyzeImage(req, res) {
-  const body = req.body || {};
-  const imageUrl = typeof body.imageUrl === "string" ? body.imageUrl : "";
-  const imageDataUrl = body.imageDataUrl;
+async function analyzeImage(body) {
+  const payload = body || {};
+  const imageUrl = typeof payload.imageUrl === "string" ? payload.imageUrl : "";
+  const imageDataUrl = payload.imageDataUrl;
 
   if (!imageDataUrl || typeof imageDataUrl !== "string") {
-    res.status(400).json({
-      error: {
-        code: "INVALID_INPUT",
-        message: "imageDataUrl is required and must be a string."
-      }
-    });
-    return;
+    const inputError = new Error("imageDataUrl is required and must be a string.");
+    inputError.code = "INVALID_INPUT";
+    inputError.statusCode = 400;
+    throw inputError;
   }
 
-  try {
-    const result = await callUpstreamAnalyze({
-      imageUrl: imageUrl,
-      imageDataUrl: imageDataUrl
-    });
+  return callUpstreamAnalyze({
+    imageUrl: imageUrl,
+    imageDataUrl: imageDataUrl
+  });
+}
 
+app.post("/api/analyze-image", async function analyzeImageHandler(req, res) {
+  try {
+    const result = await analyzeImage(req.body);
     res.json(result);
   } catch (error) {
+    console.error("analyze-image error:", error);
     const statusCode = Number(error && error.statusCode) || 500;
     const code = (error && error.code) || "ANALYZE_FAILED";
     const message = (error && error.message) || "Analyze failed.";
