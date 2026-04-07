@@ -587,6 +587,7 @@ async function callUpstreamAnalyze(params) {
   }
 
   const runPromise = (async () => {
+    const isGeminiModel = /gemini/i.test(CURRENT_MODEL);
     const endpoint = resolveChatCompletionsEndpoint(CURRENT_API_URL);
     const apiKey = CURRENT_API_KEY;
     const rawApiKey = CURRENT_RAW_API_KEY;
@@ -605,19 +606,27 @@ async function callUpstreamAnalyze(params) {
     }
 
     const requestHeaders = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
+      "Content-Type": "application/json"
     };
+    if (!isGeminiModel) {
+      requestHeaders.Authorization = `Bearer ${apiKey}`;
+    }
 
-    console.log(`[${modelTag}] BASE URL:`, endpoint);
+    const requestEndpoint = isGeminiModel
+      ? `${process.env.GEMINI_API_URL}?key=${process.env.GEMINI_API_KEY}`
+      : endpoint;
+
+    console.log(`[${modelTag}] BASE URL:`, isGeminiModel ? `${process.env.GEMINI_API_URL}?key=***` : endpoint);
     console.log(`[${modelTag}] API KEY (masked):`, maskKey(apiKey));
     console.log(`[${modelTag}] API KEY fingerprint:`, keyFingerprint(apiKey));
     console.log(`[${modelTag}] API KEY inspect:`, inspectKey(rawApiKey, apiKey));
     console.log(`[${modelTag}] REQUEST HEADERS:`, {
       "Content-Type": requestHeaders["Content-Type"],
-      Authorization: `Bearer ${maskKey(apiKey)}`
+      Authorization: requestHeaders.Authorization ? `Bearer ${maskKey(apiKey)}` : undefined
     });
-    console.log(`[${modelTag}] AUTH HEADER:`, `Bearer ${maskKey(apiKey)}`);
+    if (requestHeaders.Authorization) {
+      console.log(`[${modelTag}] AUTH HEADER:`, `Bearer ${maskKey(apiKey)}`);
+    }
     console.log("当前模型:", CURRENT_MODEL);
 
     const imagePrepareStartMs = nowMs();
@@ -657,7 +666,7 @@ async function callUpstreamAnalyze(params) {
         }
       ]
     };
-    if (!/gemini/i.test(CURRENT_MODEL)) {
+    if (!isGeminiModel) {
       // Only send KIMI-specific setting for KIMI-like models.
       requestBody.thinking = {
         type: "disabled"
@@ -673,7 +682,7 @@ async function callUpstreamAnalyze(params) {
     let response;
     let responseHeaders = {};
     try {
-      response = await fetch(endpoint, {
+      response = await fetch(requestEndpoint, {
         method: "POST",
         headers: requestHeaders,
         body: JSON.stringify(requestBody),
