@@ -12,6 +12,7 @@
 
     const useMock = opts.useMock === true;
     const detailLevel = opts.detailLevel === "enhanced" ? "enhanced" : "default";
+    const installId = String(opts.installId || "").trim();
 
     if (useMock) {
       if (!root.mockApi || typeof root.mockApi.mockAnalyzeImage !== "function") {
@@ -40,7 +41,8 @@
         body: JSON.stringify({
           imageUrl: safeImageUrl,
           imageDataUrl: imageDataUrl,
-          detailLevel: detailLevel
+          detailLevel: detailLevel,
+          installId: installId
         })
       });
     } catch (error) {
