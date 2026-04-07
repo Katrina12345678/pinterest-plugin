@@ -11,6 +11,7 @@
     }
 
     const useMock = opts.useMock === true;
+    const detailLevel = opts.detailLevel === "enhanced" ? "enhanced" : "default";
 
     if (useMock) {
       if (!root.mockApi || typeof root.mockApi.mockAnalyzeImage !== "function") {
@@ -38,7 +39,8 @@
         },
         body: JSON.stringify({
           imageUrl: safeImageUrl,
-          imageDataUrl: imageDataUrl
+          imageDataUrl: imageDataUrl,
+          detailLevel: detailLevel
         })
       });
     } catch (error) {
