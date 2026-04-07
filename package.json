@@ -4,6 +4,7 @@
   "private": true,
   "description": "ImgtoPrompt Chrome Extension + local proxy backend",
   "scripts": {
+    "start": "node server/index.js", 
     "server:start": "node server/index.js",
     "server:start:proxy": "HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 NO_PROXY=localhost,127.0.0.1 NODE_USE_ENV_PROXY=1 node server/index.js",
     "server:dev": "nodemon server/index.js"
