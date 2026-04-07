@@ -1,6 +1,6 @@
 (function initApi(global) {
   const root = global.ImgtoPrompt || (global.ImgtoPrompt = {});
-  const LOCAL_ANALYZE_ENDPOINT = "http://localhost:3001/api/analyze-image";
+  const REMOTE_ANALYZE_ENDPOINT = "https://pinterest-plugin-server.onrender.com/api/analyze-image";
 
   async function analyzeImage(imageUrl, options) {
     const opts = options || {};
@@ -27,7 +27,7 @@
       throw new Error("未生成图片 base64 数据，请重试。");
     }
 
-    const endpoint = opts.endpoint || LOCAL_ANALYZE_ENDPOINT;
+    const endpoint = opts.endpoint || REMOTE_ANALYZE_ENDPOINT;
     let response;
 
     try {
@@ -42,7 +42,7 @@
         })
       });
     } catch (error) {
-      throw new Error("无法连接本地后端，请确认 http://localhost:3001 已启动。");
+      throw new Error("无法连接线上后端，请稍后重试。");
     }
 
     const rawText = await response.text();
