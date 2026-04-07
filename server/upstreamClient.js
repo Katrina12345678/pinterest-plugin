@@ -301,6 +301,16 @@ function resolveChatCompletionsEndpoint(rawUrl) {
   if (!input) {
     return "";
   }
+  if (/generativelanguage\.googleapis\.com/i.test(input)) {
+    try {
+      const parsed = new URL(input);
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      const version = parts.find((part) => /^v\d+(beta)?$/i.test(part)) || "v1beta";
+      return `${parsed.origin}/${version}/openai/chat/completions`;
+    } catch (error) {
+      // Fall through to string-based normalization below.
+    }
+  }
   if (/\/openai\/chat\/completions\/?$/i.test(input)) {
     return input.replace(/\/+$/, "");
   }
