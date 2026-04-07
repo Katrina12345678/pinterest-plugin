@@ -14,6 +14,7 @@
     "https://*.pinterest.com/*",
     "https://pinterest.com/*",
     "https://*.pinimg.com/*",
+    "https://pinterest-plugin-server.onrender.com/*",
     "http://localhost:3001/*",
     "http://127.0.0.1:3001/*"
   ],
