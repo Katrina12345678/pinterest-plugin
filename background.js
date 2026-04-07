@@ -76,7 +76,7 @@ importScripts("utils/constants.js", "utils/mockApi.js", "utils/api.js");
     }
 
     const candidates = [];
-    const sizes = ["564x", "474x"];
+    const sizes = ["474x", "236x"];
     sizes.forEach(function eachSize(size) {
       try {
         const next = new URL(original);
@@ -102,6 +102,65 @@ importScripts("utils/constants.js", "utils/mockApi.js", "utils/api.js");
       binary += String.fromCharCode.apply(null, chunk);
     }
     return btoa(binary);
+  }
+
+  async function optimizeImageDataUrl(arrayBuffer, sourceMimeType) {
+    const defaults = (constants && constants.DEFAULTS) || {};
+    const maxEdgeRaw = Number(defaults.imageBase64MaxEdge);
+    const jpegQualityRaw = Number(defaults.imageBase64JpegQuality);
+    const maxEdge = Number.isFinite(maxEdgeRaw) && maxEdgeRaw > 0 ? Math.round(maxEdgeRaw) : 960;
+    const jpegQuality = Number.isFinite(jpegQualityRaw)
+      ? Math.min(Math.max(jpegQualityRaw, 0.4), 0.95)
+      : 0.78;
+
+    if (
+      typeof globalThis.OffscreenCanvas === "undefined" ||
+      typeof globalThis.createImageBitmap !== "function"
+    ) {
+      return null;
+    }
+
+    try {
+      const sourceBlob = new Blob([arrayBuffer], { type: sourceMimeType || "image/jpeg" });
+      const bitmap = await createImageBitmap(sourceBlob);
+      const width = Number(bitmap.width) || 0;
+      const height = Number(bitmap.height) || 0;
+      if (!width || !height) {
+        if (typeof bitmap.close === "function") {
+          bitmap.close();
+        }
+        return null;
+      }
+
+      const scale = Math.min(1, maxEdge / Math.max(width, height));
+      const targetWidth = Math.max(1, Math.round(width * scale));
+      const targetHeight = Math.max(1, Math.round(height * scale));
+
+      const canvas = new OffscreenCanvas(targetWidth, targetHeight);
+      const context = canvas.getContext("2d");
+      if (!context) {
+        if (typeof bitmap.close === "function") {
+          bitmap.close();
+        }
+        return null;
+      }
+      context.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+      if (typeof bitmap.close === "function") {
+        bitmap.close();
+      }
+
+      const outputMimeType = /image\/png/i.test(sourceMimeType || "") ? "image/png" : "image/jpeg";
+      const outputBlob = await canvas.convertToBlob(
+        outputMimeType === "image/jpeg"
+          ? { type: outputMimeType, quality: jpegQuality }
+          : { type: outputMimeType }
+      );
+      const outputArrayBuffer = await outputBlob.arrayBuffer();
+      const outputBase64 = arrayBufferToBase64(outputArrayBuffer);
+      return `data:${outputMimeType};base64,${outputBase64}`;
+    } catch (error) {
+      return null;
+    }
   }
 
   async function fetchImageAsDataUrl(imageUrl) {
@@ -144,10 +203,11 @@ importScripts("utils/constants.js", "utils/mockApi.js", "utils/api.js");
         }
 
         const mimeType = inferImageMimeType(response.headers.get("content-type"), candidateUrl, bytes);
-        const base64 = arrayBufferToBase64(arrayBuffer);
+        const optimizedDataUrl = await optimizeImageDataUrl(arrayBuffer, mimeType);
+        const base64 = optimizedDataUrl ? "" : arrayBufferToBase64(arrayBuffer);
         return {
           sourceUrl: candidateUrl,
-          dataUrl: `data:${mimeType};base64,${base64}`
+          dataUrl: optimizedDataUrl || `data:${mimeType};base64,${base64}`
         };
       } catch (error) {
         if (error && error.name === "AbortError") {
@@ -219,6 +279,10 @@ importScripts("utils/constants.js", "utils/mockApi.js", "utils/api.js");
     const payload = message.payload || {};
     const imageUrl = payload.imageUrl || "";
     const imageDataUrl = typeof payload.imageDataUrl === "string" ? payload.imageDataUrl.trim() : "";
+    const detailLevel =
+      payload.detailLevel === constants.DETAIL_LEVEL.ENHANCED
+        ? constants.DETAIL_LEVEL.ENHANCED
+        : constants.DETAIL_LEVEL.DEFAULT;
     const forceMock = false;
     const useMock = forceMock || payload.useMock === true;
 
@@ -233,7 +297,8 @@ importScripts("utils/constants.js", "utils/mockApi.js", "utils/api.js");
       .then(function withImageData(resolvedImageDataUrl) {
         return api.analyzeImage(imageUrl, {
           useMock: useMock,
-          imageDataUrl: resolvedImageDataUrl
+          imageDataUrl: resolvedImageDataUrl,
+          detailLevel: detailLevel
         });
       })
       .then(function onSuccess(data) {
