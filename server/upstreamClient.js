@@ -21,7 +21,11 @@ const UPSTREAM_RETRY_BASE_DELAY_MS = Math.max(
 const ANALYZE_CACHE_TTL_MS = Number.parseInt(process.env.ANALYZE_CACHE_TTL_MS || "600000", 10) || 600000;
 const ANALYZE_CACHE_MAX_ITEMS = 200;
 const DEBUG_UPSTREAM_RAW = /^(1|true|yes)$/i.test(String(process.env.DEBUG_UPSTREAM_RAW || ""));
-const ANALYZE_CACHE_VERSION = "v3-extension-data-url";
+const ANALYZE_CACHE_VERSION = "v4-extension-data-url-detail-level";
+const DETAIL_LEVEL = {
+  DEFAULT: "default",
+  ENHANCED: "enhanced"
+};
 
 const analyzeResultCache = new Map();
 const inFlightAnalyzeRequests = new Map();
@@ -40,6 +44,12 @@ function sleep(ms) {
   });
 }
 
+function normalizeDetailLevel(value) {
+  return String(value || "").toLowerCase() === DETAIL_LEVEL.ENHANCED
+    ? DETAIL_LEVEL.ENHANCED
+    : DETAIL_LEVEL.DEFAULT;
+}
+
 function logTiming(modelTag, stage, ms, extra) {
   const suffix = extra ? ` | ${extra}` : "";
   console.log(`[${modelTag}][TIMING] ${stage}: ${ms}ms${suffix}`);
@@ -53,11 +63,12 @@ function deepClone(value) {
   }
 }
 
-function createAnalyzeCacheKey(imageUrl, imageDataUrl) {
+function createAnalyzeCacheKey(imageUrl, imageDataUrl, detailLevel) {
+  const level = normalizeDetailLevel(detailLevel);
   const imageDataDigest = crypto.createHash("sha1").update(String(imageDataUrl || "")).digest("hex");
   return crypto
     .createHash("sha1")
-    .update(`${ANALYZE_CACHE_VERSION}:${String(imageUrl || "")}:${imageDataDigest}`)
+    .update(`${ANALYZE_CACHE_VERSION}:${level}:${String(imageUrl || "")}:${imageDataDigest}`)
     .digest("hex");
 }
 
@@ -361,7 +372,9 @@ function extractJsonObject(text) {
   }
 }
 
-function normalizeTags(raw) {
+function normalizeTags(raw, maxTags) {
+  const parsedMaxTags = Number.parseInt(String(maxTags || ""), 10);
+  const safeMaxTags = Number.isFinite(parsedMaxTags) && parsedMaxTags > 0 ? parsedMaxTags : 6;
   const EN_TO_ZH_TAG_MAP = {
     portrait: "人像",
     "fashion portrait": "时尚人像",
@@ -438,7 +451,7 @@ function normalizeTags(raw) {
         seen.add(item);
       }
     });
-    return deduped.slice(0, 6);
+    return deduped.slice(0, safeMaxTags);
   }
 
   if (Array.isArray(raw)) {
@@ -454,9 +467,11 @@ function normalizeTags(raw) {
   return [];
 }
 
-function normalizeAnalyzeResult(payload) {
+function normalizeAnalyzeResult(payload, options) {
+  const opts = options || {};
+  const maxTags = Number.isFinite(Number(opts.maxTags)) ? Number(opts.maxTags) : 6;
   const data = payload && typeof payload === "object" ? payload : {};
-  const tags = normalizeTags(data.tags);
+  const tags = normalizeTags(data.tags, maxTags);
   const jsonResult =
     data.json_result && typeof data.json_result === "object" && !Array.isArray(data.json_result)
       ? data.json_result
@@ -502,7 +517,7 @@ function detectSectionKey(line) {
   return "";
 }
 
-function parseSectionedText(text) {
+function parseSectionedText(text, maxTags) {
   const lines = String(text || "")
     .split(/\n+/)
     .map((line) => line.trim())
@@ -539,13 +554,15 @@ function parseSectionedText(text) {
     summary_en: sections.summary_en.join("\n").trim(),
     prompt_zh: sections.prompt_zh.join("\n").trim(),
     prompt_en: sections.prompt_en.join("\n").trim(),
-    tags: normalizeTags(sections.tags.join(" ")),
+    tags: normalizeTags(sections.tags.join(" "), maxTags),
     jsonText: sections.json.join("\n").trim(),
     lines: lines
   };
 }
 
-function parseModelOutputToResult(messageText) {
+function parseModelOutputToResult(messageText, options) {
+  const opts = options || {};
+  const maxTags = Number.isFinite(Number(opts.maxTags)) ? Number(opts.maxTags) : 6;
   const parsedJson = extractJsonObject(messageText);
   if (parsedJson) {
     return normalizeAnalyzeResult({
@@ -555,12 +572,12 @@ function parseModelOutputToResult(messageText) {
       prompt_zh: parsedJson.prompt_zh || parsedJson.promptZh || parsedJson.zh_prompt || "",
       prompt_en: parsedJson.prompt_en || parsedJson.promptEn || parsedJson.en_prompt || "",
       json_result: parsedJson.json_result || parsedJson.jsonResult || parsedJson
-    });
+    }, { maxTags: maxTags });
   }
 
   // Fallback parsing for plain text responses.
   const text = String(messageText || "").trim();
-  const sectionData = parseSectionedText(text);
+  const sectionData = parseSectionedText(text, maxTags);
   const jsonFromSection = extractJsonObject(sectionData.jsonText || "");
 
   const summaryZh = sectionData.summary_zh || sectionData.lines[0] || text;
@@ -576,7 +593,40 @@ function parseModelOutputToResult(messageText) {
     prompt_zh: promptZh,
     prompt_en: promptEn,
     json_result: jsonFromSection || { raw: text }
-  });
+  }, { maxTags: maxTags });
+}
+
+function getTagLimitForDetailLevel(detailLevel) {
+  return normalizeDetailLevel(detailLevel) === DETAIL_LEVEL.ENHANCED ? 6 : 4;
+}
+
+function buildAnalyzeInstruction(detailLevel) {
+  const normalizedDetailLevel = normalizeDetailLevel(detailLevel);
+  if (normalizedDetailLevel === DETAIL_LEVEL.ENHANCED) {
+    return [
+      "请分析这张图片，并严格只输出一个 JSON 对象，不要输出任何额外解释、标题、Markdown 或代码块。",
+      "字段必须完整包含：",
+      "1) summary_zh: 中文描述字符串",
+      "2) summary_en: 英文描述字符串",
+      "3) tags: 最多6个中文字符串数组（必须中文，不要英文）",
+      "4) prompt_zh: 中文提示词字符串（增强版，信息密度高，需覆盖场景/主体/构图/光线/色彩/材质/情绪/动作）",
+      "5) prompt_en: 英文提示词字符串（增强版，信息密度高，需覆盖 scene/subject/composition/lighting/color/material/mood/action）",
+      "6) json_result: 对象，包含 subject/style/lighting/composition/mood 字段",
+      "请确保所有字段非空；如果无法判断也要给出合理补全。"
+    ].join("\n");
+  }
+
+  return [
+    "请分析这张图片，并严格只输出一个 JSON 对象，不要输出任何额外解释、标题、Markdown 或代码块。",
+    "字段必须完整包含：",
+    "1) summary_zh: 中文描述字符串",
+    "2) summary_en: 英文描述字符串",
+    "3) tags: 最多4个中文字符串数组（必须中文，不要英文）",
+    "4) prompt_zh: 中文提示词字符串（简洁但完整）",
+    "5) prompt_en: 英文提示词字符串（concise but complete）",
+    "6) json_result: 对象，包含 subject/style/lighting/composition/mood 字段",
+    "请确保所有字段非空；如果无法判断也要给出合理补全。"
+  ].join("\n");
 }
 
 async function callUpstreamAnalyze(params) {
@@ -584,6 +634,8 @@ async function callUpstreamAnalyze(params) {
   const options = params || {};
   const imageUrl = typeof options.imageUrl === "string" ? options.imageUrl : "";
   const imageDataUrl = typeof options.imageDataUrl === "string" ? options.imageDataUrl : "";
+  const detailLevel = normalizeDetailLevel(options.detailLevel);
+  const tagLimit = getTagLimitForDetailLevel(detailLevel);
   const modelTag = MODEL_TAG;
   const errorPrefix = MODEL_TAG;
 
@@ -603,16 +655,16 @@ async function callUpstreamAnalyze(params) {
     throw formatError;
   }
 
-  const cacheKey = createAnalyzeCacheKey(imageUrl, payloadImageUrl);
+  const cacheKey = createAnalyzeCacheKey(imageUrl, payloadImageUrl, detailLevel);
   const cachedResult = getCachedAnalyzeResult(cacheKey);
   if (cachedResult) {
-    console.log(`[${modelTag}] cache hit:`, cacheKey.slice(0, 8));
+    console.log(`[${modelTag}] cache hit:`, cacheKey.slice(0, 8), `detailLevel=${detailLevel}`);
     logTiming(modelTag, "analyze_total", durationFrom(analyzeStartMs), "cache_hit");
     return cachedResult;
   }
 
   if (inFlightAnalyzeRequests.has(cacheKey)) {
-    console.log(`[${modelTag}] in-flight dedupe hit:`, cacheKey.slice(0, 8));
+    console.log(`[${modelTag}] in-flight dedupe hit:`, cacheKey.slice(0, 8), `detailLevel=${detailLevel}`);
     return inFlightAnalyzeRequests.get(cacheKey);
   }
 
@@ -659,6 +711,7 @@ async function callUpstreamAnalyze(params) {
     });
     console.log(`[${modelTag}] AUTH HEADER:`, `Bearer ${maskKey(apiKey)}`);
     console.log("当前模型:", CURRENT_MODEL);
+    console.log("当前 detailLevel:", detailLevel, `tags<=${tagLimit}`);
 
     const imagePrepareStartMs = nowMs();
     const approxBytes = Math.round((payloadImageUrl.length * 3) / 4);
@@ -675,17 +728,7 @@ async function callUpstreamAnalyze(params) {
           content: [
             {
               type: "text",
-              text: [
-                "请分析这张图片，并严格只输出一个 JSON 对象，不要输出任何额外解释、标题、Markdown 或代码块。",
-                "字段必须完整包含：",
-                "1) summary_zh: 中文描述字符串",
-                "2) summary_en: 英文描述字符串",
-                "3) tags: 长度为6的中文字符串数组（必须中文，不要英文）",
-                "4) prompt_zh: 中文提示词字符串",
-                "5) prompt_en: 英文提示词字符串",
-                "6) json_result: 对象，包含 subject/style/lighting/composition/mood 字段",
-                "请确保所有字段非空；如果无法判断也要给出合理补全。"
-              ].join("\n")
+              text: buildAnalyzeInstruction(detailLevel)
             },
             {
               type: "image_url",
@@ -884,7 +927,7 @@ async function callUpstreamAnalyze(params) {
       typeof parsed.choices[0].message.content === "string"
         ? parsed.choices[0].message.content
         : "";
-    const result = parseModelOutputToResult(content);
+    const result = parseModelOutputToResult(content, { maxTags: tagLimit });
     logTiming(modelTag, "parse_model_output", durationFrom(parseStartMs));
     setCachedAnalyzeResult(cacheKey, result);
     logTiming(modelTag, "analyze_total", durationFrom(analyzeStartMs), "live");

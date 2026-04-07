@@ -77,6 +77,7 @@ async function analyzeImage(body) {
   const payload = body || {};
   const imageUrl = typeof payload.imageUrl === "string" ? payload.imageUrl : "";
   const imageDataUrl = payload.imageDataUrl;
+  const detailLevel = payload.detailLevel === "enhanced" ? "enhanced" : "default";
 
   if (!imageDataUrl || typeof imageDataUrl !== "string") {
     const inputError = new Error("imageDataUrl is required and must be a string.");
@@ -87,7 +88,8 @@ async function analyzeImage(body) {
 
   return callUpstreamAnalyze({
     imageUrl: imageUrl,
-    imageDataUrl: imageDataUrl
+    imageDataUrl: imageDataUrl,
+    detailLevel: detailLevel
   });
 }
 
