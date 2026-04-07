@@ -625,11 +625,9 @@ async function callUpstreamAnalyze(params) {
     }
 
     const requestHeaders = {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
     };
-    if (!isGeminiModel) {
-      requestHeaders.Authorization = `Bearer ${apiKey}`;
-    }
 
     let requestEndpoint = endpoint;
     if (isGeminiModel) {
@@ -646,11 +644,9 @@ async function callUpstreamAnalyze(params) {
     console.log(`[${modelTag}] API KEY inspect:`, inspectKey(rawApiKey, apiKey));
     console.log(`[${modelTag}] REQUEST HEADERS:`, {
       "Content-Type": requestHeaders["Content-Type"],
-      Authorization: requestHeaders.Authorization ? `Bearer ${maskKey(apiKey)}` : undefined
+      Authorization: `Bearer ${maskKey(apiKey)}`
     });
-    if (requestHeaders.Authorization) {
-      console.log(`[${modelTag}] AUTH HEADER:`, `Bearer ${maskKey(apiKey)}`);
-    }
+    console.log(`[${modelTag}] AUTH HEADER:`, `Bearer ${maskKey(apiKey)}`);
     console.log("当前模型:", CURRENT_MODEL);
 
     const imagePrepareStartMs = nowMs();
