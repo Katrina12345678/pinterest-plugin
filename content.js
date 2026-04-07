@@ -391,9 +391,11 @@
     ensureRoot() {
       const existing = document.getElementById(constants.ROOT_ID);
       if (existing) {
-        const hasEnhanceButton = Boolean(existing.querySelector(".itp-enhance"));
-        const hasTitleRow = Boolean(existing.querySelector(".itp-title-row"));
-        if (hasEnhanceButton && hasTitleRow) {
+        const hasFooterEnhanceIcon = Boolean(existing.querySelector(".itp-enhance.itp-enhance-icon"));
+        const hasLegacyHeaderEnhance = Boolean(
+          existing.querySelector(".itp-header .itp-enhance:not(.itp-enhance-icon)")
+        );
+        if (hasFooterEnhanceIcon && !hasLegacyHeaderEnhance) {
           this.root = existing;
           this.collectRefs();
           return;
@@ -405,19 +407,20 @@
         attrs: { id: constants.ROOT_ID },
         className: "itp-root"
       });
+      const moreIconUrl =
+        global.chrome && chrome.runtime && typeof chrome.runtime.getURL === "function"
+          ? chrome.runtime.getURL("assets/MORE.png")
+          : "assets/MORE.png";
 
       rootEl.innerHTML = [
         '<button class="itp-fab" type="button" aria-label="Open ImgtoPrompt">✦</button>',
         `<section id="${constants.CARD_ID}" class="itp-card">`,
         '  <header class="itp-header itp-drag-handle">',
-        `    <div class="itp-brand">${constants.UI_TEXT.brand}</div>`,
         '    <div class="itp-title-row">',
-        '      <h3 class="itp-title"></h3>',
-        '      <div class="itp-header-actions">',
+        `      <div class="itp-brand">${constants.UI_TEXT.brand}</div>`,
         `        <button class="itp-close" type="button" aria-label="${constants.UI_TEXT.close}">×</button>`,
-        `        <button class="itp-enhance" type="button">${constants.UI_TEXT.enhanceAnalyze}</button>`,
-        "      </div>",
         "    </div>",
+        '    <h3 class="itp-title"></h3>',
         "  </header>",
         '  <div class="itp-content">',
         '    <section class="itp-view itp-view-analyzing">',
@@ -447,10 +450,15 @@
         "    </section>",
         "  </div>",
         '  <footer class="itp-footer">',
-        '    <div class="itp-language-switch">',
-        '      <button type="button" data-view="zh">中</button>',
-        '      <button type="button" data-view="en">EN</button>',
-        '      <button type="button" data-view="json">J</button>',
+        '    <div class="itp-footer-left">',
+        '      <div class="itp-language-switch">',
+        '        <button type="button" data-view="zh">中</button>',
+        '        <button type="button" data-view="en">EN</button>',
+        '        <button type="button" data-view="json">J</button>',
+        "      </div>",
+        `      <button class="itp-enhance itp-enhance-icon" type="button" aria-label="${constants.UI_TEXT.enhanceAnalyze}" title="${constants.UI_TEXT.enhanceAnalyze}">`,
+        `        <img class="itp-enhance-icon-img" src="${moreIconUrl}" alt="" />`,
+        "      </button>",
         "    </div>",
         `    <button class="itp-copy" type="button">${constants.UI_TEXT.copy}</button>`,
         "  </footer>",
@@ -993,9 +1001,13 @@
       this.refs.title.textContent = titleMap[state] || constants.UI_TEXT.resultTitle;
       this.refs.footer.style.display = state === constants.PANEL_STATE.RESULT ? "flex" : "none";
       if (this.refs.enhance) {
-        this.refs.enhance.style.display = state === constants.PANEL_STATE.RESULT ? "inline-flex" : "none";
-        this.refs.enhance.disabled = state !== constants.PANEL_STATE.RESULT;
-        this.refs.enhance.textContent = constants.UI_TEXT.enhanceAnalyze;
+        const isResult = state === constants.PANEL_STATE.RESULT;
+        const isEnhancedResult =
+          isResult && this.state.currentDetailLevel === constants.DETAIL_LEVEL.ENHANCED;
+        this.refs.enhance.style.display = isResult ? "inline-flex" : "none";
+        this.refs.enhance.disabled = !isResult;
+        this.refs.enhance.classList.toggle("is-active", isEnhancedResult);
+        this.refs.enhance.setAttribute("aria-pressed", isEnhancedResult ? "true" : "false");
       }
 
       this.refs.viewAnalyzing.style.display = state === constants.PANEL_STATE.ANALYZING ? "block" : "none";
