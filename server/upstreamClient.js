@@ -301,8 +301,17 @@ function resolveChatCompletionsEndpoint(rawUrl) {
   if (!input) {
     return "";
   }
+  if (/\/openai\/chat\/completions\/?$/i.test(input)) {
+    return input.replace(/\/+$/, "");
+  }
+  if (/\/openai\/?$/i.test(input)) {
+    return `${input.replace(/\/+$/, "")}/chat/completions`;
+  }
   if (/\/chat\/completions\/?$/i.test(input)) {
     return input.replace(/\/+$/, "");
+  }
+  if (/generativelanguage\.googleapis\.com/i.test(input) && /\/v1beta\/?$/i.test(input)) {
+    return `${input.replace(/\/+$/, "")}/openai/chat/completions`;
   }
   if (/\/v1\/?$/i.test(input)) {
     return `${input.replace(/\/+$/, "")}/chat/completions`;
@@ -612,11 +621,16 @@ async function callUpstreamAnalyze(params) {
       requestHeaders.Authorization = `Bearer ${apiKey}`;
     }
 
-    const requestEndpoint = isGeminiModel
-      ? `${process.env.GEMINI_API_URL}?key=${process.env.GEMINI_API_KEY}`
-      : endpoint;
+    let requestEndpoint = endpoint;
+    if (isGeminiModel) {
+      const geminiEndpoint = resolveChatCompletionsEndpoint(process.env.GEMINI_API_URL || endpoint);
+      const geminiKey = String(process.env.GEMINI_API_KEY || apiKey || "").trim();
+      const requestUrl = new URL(geminiEndpoint);
+      requestUrl.searchParams.set("key", geminiKey);
+      requestEndpoint = requestUrl.toString();
+    }
 
-    console.log(`[${modelTag}] BASE URL:`, isGeminiModel ? `${process.env.GEMINI_API_URL}?key=***` : endpoint);
+    console.log(`[${modelTag}] BASE URL:`, isGeminiModel ? requestEndpoint.replace(/key=[^&]*/i, "key=***") : endpoint);
     console.log(`[${modelTag}] API KEY (masked):`, maskKey(apiKey));
     console.log(`[${modelTag}] API KEY fingerprint:`, keyFingerprint(apiKey));
     console.log(`[${modelTag}] API KEY inspect:`, inspectKey(rawApiKey, apiKey));
