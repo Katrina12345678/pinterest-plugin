@@ -271,6 +271,39 @@ importScripts("utils/constants.js", "utils/mockApi.js", "utils/api.js");
     );
   });
 
+  function generateInstallationId() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, function toHex(byte) {
+      return byte.toString(16).padStart(2, "0");
+    }).join("");
+    return `itp_${hex}`;
+  }
+
+  function getInstallationId() {
+    const storageKey =
+      constants && constants.STORAGE_KEY ? constants.STORAGE_KEY.INSTALLATION_ID : "imgtoprompt_installation_id";
+    return new Promise(function resolveInstallId(resolve) {
+      try {
+        chrome.storage.local.get([storageKey], function onGet(result) {
+          const existing = result && result[storageKey] ? String(result[storageKey]).trim() : "";
+          if (existing) {
+            resolve(existing);
+            return;
+          }
+
+          const created = generateInstallationId();
+          chrome.storage.local.set({ [storageKey]: created }, function onSet() {
+            resolve(created);
+          });
+        });
+      } catch (error) {
+        // Storage failures should not block analyze flow.
+        resolve("itp_unknown_install");
+      }
+    });
+  }
+
   chrome.runtime.onMessage.addListener(function onMessage(message, sender, sendResponse) {
     if (!message || message.type !== constants.MESSAGE_TYPE.ANALYZE_REQUEST) {
       return false;
@@ -295,10 +328,19 @@ importScripts("utils/constants.js", "utils/mockApi.js", "utils/api.js");
 
     imageDataPromise
       .then(function withImageData(resolvedImageDataUrl) {
+        return getInstallationId().then(function withInstallId(installId) {
+          return {
+            resolvedImageDataUrl: resolvedImageDataUrl,
+            installId: installId
+          };
+        });
+      })
+      .then(function withPayload(payloadData) {
         return api.analyzeImage(imageUrl, {
           useMock: useMock,
-          imageDataUrl: resolvedImageDataUrl,
-          detailLevel: detailLevel
+          imageDataUrl: payloadData.resolvedImageDataUrl,
+          detailLevel: detailLevel,
+          installId: payloadData.installId
         });
       })
       .then(function onSuccess(data) {
