@@ -115,4 +115,4 @@ We may update this Privacy Policy from time to time. Updates will be reflected w
 
 If you have any questions, please contact:
 
-Email: your-email@example.com
+Email: zhangjinglin2025@gmail.com
